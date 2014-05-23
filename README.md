@@ -6,6 +6,16 @@ xRun is a development tool for Go programming language.
 
 * Auto rebuild and run the program when go files or other special files be changed.
 
+# Installation
+
+If you have [got](github.com/gobuild/got) installed,
+
+	got go-xweb/xrun
+
+or
+
+	go get github.com/go-xweb/xrun
+
 # How to use
 
 	cd <project dir>
