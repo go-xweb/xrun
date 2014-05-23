@@ -8,7 +8,7 @@ xRun is a development tool for Go programming language.
 
 # Installation
 
-If you have [got](github.com/gobuild/got) installed,
+If you have [got](http://github.com/gobuild/got) installed,
 
 	got go-xweb/xrun
 
