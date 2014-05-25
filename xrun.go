@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-xweb/log"
 	"github.com/howeyc/fsnotify"
 )
 
@@ -77,7 +78,7 @@ func loadConfig() error {
 	}
 	defer f.Close()
 
-	Info("Loaded xrun.json")
+	log.Info("Loaded xrun.json")
 	return json.NewDecoder(f).Decode(&config)
 }
 
@@ -90,7 +91,7 @@ func build() error {
 		buildProcess.Wait()
 	}
 
-	Info("开始编译", appName)
+	log.Info("开始编译", appName)
 	args := []string{"build"}
 	args = append(args, "-o", runName)
 	if len(os.Args) > 1 {
@@ -113,7 +114,7 @@ func build() error {
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	}
 
-	Info("开始运行")
+	log.Info("开始运行")
 	buildProcess, err = os.StartProcess(exePath, []string{runName}, attr)
 	if err != nil {
 		return err
@@ -127,7 +128,7 @@ func scan() {
 		var b string
 		_, err := fmt.Scanf("%s\n", &b)
 		if err != nil {
-			Error(err)
+			log.Error(err)
 			continue
 		}
 		//fmt.Println("===command===", string(b))
@@ -147,7 +148,7 @@ func scan() {
 func main() {
 	err := loadConfig()
 	if err != nil {
-		Error("load config error:", err)
+		log.Error("load config error:", err)
 		return
 	}
 	if len(config.ExcludeDirs) > 0 {
@@ -188,7 +189,7 @@ func main() {
 
 	err = build()
 	if err != nil {
-		Error(err)
+		log.Error(err)
 		return
 	}
 
@@ -197,13 +198,13 @@ func main() {
 	os.Setenv("XRUN_APP_PATH", exePath)
 	os.Setenv("XRUN_SRC_PATH", curPath)
 
-	Info("Start web interface")
+	log.Info("Start web interface")
 	go web()
 
 	//Info("Start accept commands")
 	//go scan()
 
-	Info("Start moniter")
+	log.Info("Start moniter")
 	moniter(curPath, config.IncludeDirs)
 }
 
@@ -250,16 +251,16 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 					}
 				}
 
-				fmt.Println("File is changed:", ev.Name)
+				log.Info("File is changed:", ev.Name)
 
 				if ev.IsCreate() {
 					if d.IsDir() {
 						watcher.Watch(ev.Name)
 					} else {
-						Infof("loaded %v", ev.Name)
+						log.Infof("loaded %v", ev.Name)
 						err = build()
 						if err != nil {
-							Errorf("load %v failed: %v", ev.Name, err)
+							log.Errorf("load %v failed: %v", ev.Name, err)
 							break
 						}
 					}
@@ -268,10 +269,10 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 						watcher.RemoveWatch(ev.Name)
 					} else {
 						tmpl := ev.Name
-						Infof("deleted %v", tmpl)
+						log.Infof("deleted %v", tmpl)
 						err = build()
 						if err != nil {
-							Errorf("remove %v failed: %v", ev.Name, err)
+							log.Errorf("remove %v failed: %v", ev.Name, err)
 							break
 						}
 					}
@@ -281,11 +282,11 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 						tmpl := ev.Name
 						err = build()
 						if err != nil {
-							Errorf("reloaded %v failed: %v", tmpl, err)
+							log.Errorf("reloaded %v failed: %v", tmpl, err)
 							break
 						}
 
-						Infof("reloaded %v", tmpl)
+						log.Infof("reloaded %v", tmpl)
 					}
 				} else if ev.IsRename() {
 					if d.IsDir() {
@@ -294,13 +295,13 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 						tmpl := ev.Name
 						err = build()
 						if err != nil {
-							Errorf("reloaded %v failed: %v", tmpl, err)
+							log.Errorf("reloaded %v failed: %v", tmpl, err)
 							break
 						}
 					}
 				}
 			case err := <-watcher.Error:
-				Errorf("watch error: %v", err)
+				log.Errorf("watch error: %v", err)
 			}
 		}
 	}()
@@ -327,7 +328,7 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 	}
 
 	if err != nil {
-		Error(err.Error())
+		log.Error(err.Error())
 		return err
 	}
 
