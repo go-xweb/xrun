@@ -21,7 +21,7 @@ var (
 	buildLock    sync.Mutex
 	buildProcess *os.Process
 	exePath      string
-	lastModified map[string]time.Time
+	lastModified map[string]time.Time = make(map[string]time.Time)
 	timeLock     sync.RWMutex
 )
 
@@ -38,9 +38,10 @@ func isModified(f os.FileInfo) bool {
 }
 
 type conf struct {
-	excludeDirs  map[string]bool
-	excludeFiles map[string]bool
-	includeFiles map[string]bool
+	ExcludeDirs  map[string]bool
+	ExcludeFiles map[string]bool
+	IncludeFiles map[string]bool
+	IncludeDirs  map[string]bool
 }
 
 // a messages queue to put
@@ -50,13 +51,15 @@ var (
 	curPath     string
 	config      conf
 	defaultConf = `{
-	"excludeDirs": {
+	"ExcludeDirs": {
 		".git":true,
 		".svn":true
 	},
-	"excludeFiles": {
+	"ExcludeFiles": {
 	},
-	"includeFiles": {
+	"IncludeFiles": {
+	},
+	"IncludeDirs": {
 	}
 }
 `
@@ -89,7 +92,7 @@ func build() error {
 
 	Info("开始编译", appName)
 	args := []string{"build"}
-	args = append(args, "-o", appName)
+	args = append(args, "-o", runName)
 	if len(os.Args) > 1 {
 		args = append(args, os.Args[1:]...)
 	}
@@ -147,8 +150,35 @@ func main() {
 		Error("load config error:", err)
 		return
 	}
-
+	if len(config.ExcludeDirs) > 0 {
+		dirs := config.ExcludeDirs
+		config.ExcludeDirs = make(map[string]bool)
+		for dir, v := range dirs {
+			dirPath, _ := filepath.Abs(dir)
+			dirPath = strings.Replace(dirPath, "\\", "/", -1)
+			config.ExcludeDirs[dirPath] = v
+		}
+	}
+	if len(config.ExcludeFiles) > 0 {
+		dirs := config.ExcludeFiles
+		config.ExcludeFiles = make(map[string]bool)
+		for dir, v := range dirs {
+			dirPath, _ := filepath.Abs(dir)
+			dirPath = strings.Replace(dirPath, "\\", "/", -1)
+			config.ExcludeFiles[dirPath] = v
+		}
+	}
+	if len(config.IncludeFiles) > 0 {
+		dirs := config.IncludeFiles
+		config.IncludeFiles = make(map[string]bool)
+		for dir, v := range dirs {
+			dirPath, _ := filepath.Abs(dir)
+			dirPath = strings.Replace(dirPath, "\\", "/", -1)
+			config.IncludeFiles[dirPath] = v
+		}
+	}
 	curPath, _ = os.Getwd()
+	curPath = strings.Replace(curPath, "\\", "/", -1)
 	appName = path.Base(curPath)
 	runName = appName
 	if runtime.GOOS == "windows" {
@@ -174,11 +204,11 @@ func main() {
 	//go scan()
 
 	Info("Start moniter")
-	moniter(curPath)
+	moniter(curPath, config.IncludeDirs)
 }
 
 // moniter go files
-func moniter(rootDir string) error {
+func moniter(rootDir string, otherDirs map[string]bool) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -199,18 +229,18 @@ func moniter(rootDir string) error {
 					break
 				}
 
-				relativePath := ev.Name[len(curPath)+1:]
+				relativePath := ev.Name
 				if d.IsDir() {
-					if _, ok := config.excludeDirs[relativePath]; ok {
+					if _, ok := config.ExcludeDirs[relativePath]; ok {
 						break
 					}
 				} else {
 					if strings.HasSuffix(ev.Name, ".go") {
-						if _, ok := config.excludeFiles[relativePath]; ok {
+						if _, ok := config.ExcludeFiles[relativePath]; ok {
 							break
 						}
 					} else {
-						if _, ok := config.includeFiles[relativePath]; !ok {
+						if _, ok := config.IncludeFiles[relativePath]; !ok {
 							break
 						}
 					}
@@ -220,7 +250,7 @@ func moniter(rootDir string) error {
 					}
 				}
 
-				fmt.Println("====", ev.Name, relativePath)
+				fmt.Println("File is changed:", ev.Name)
 
 				if ev.IsCreate() {
 					if d.IsDir() {
@@ -237,8 +267,8 @@ func moniter(rootDir string) error {
 					if d.IsDir() {
 						watcher.RemoveWatch(ev.Name)
 					} else {
-						tmpl := ev.Name[len(rootDir)+1:]
-						Info("deleted %v", tmpl)
+						tmpl := ev.Name
+						Infof("deleted %v", tmpl)
 						err = build()
 						if err != nil {
 							Errorf("remove %v failed: %v", ev.Name, err)
@@ -248,20 +278,20 @@ func moniter(rootDir string) error {
 				} else if ev.IsModify() {
 					if d.IsDir() {
 					} else {
-						tmpl := ev.Name[len(rootDir)+1:]
+						tmpl := ev.Name
 						err = build()
 						if err != nil {
 							Errorf("reloaded %v failed: %v", tmpl, err)
 							break
 						}
 
-						Info("reloaded %v", tmpl)
+						Infof("reloaded %v", tmpl)
 					}
 				} else if ev.IsRename() {
 					if d.IsDir() {
 						watcher.RemoveWatch(ev.Name)
 					} else {
-						tmpl := ev.Name[len(rootDir)+1:]
+						tmpl := ev.Name
 						err = build()
 						if err != nil {
 							Errorf("reloaded %v failed: %v", tmpl, err)
@@ -274,13 +304,27 @@ func moniter(rootDir string) error {
 			}
 		}
 	}()
-
-	err = filepath.Walk(rootDir, func(f string, info os.FileInfo, err error) error {
+	fn := func(f string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return watcher.Watch(f)
 		}
 		return nil
-	})
+	}
+	err = filepath.Walk(rootDir, fn)
+
+	if len(otherDirs) > 0 {
+		for otherDir, v := range otherDirs {
+			if !v {
+				continue
+			}
+			absPath, _ := filepath.Abs(otherDir)
+			absPath = strings.Replace(absPath, "\\", "/", -1)
+			if strings.HasPrefix(absPath+"/", rootDir+"/") {
+				continue
+			}
+			err = filepath.Walk(absPath, fn)
+		}
+	}
 
 	if err != nil {
 		Error(err.Error())

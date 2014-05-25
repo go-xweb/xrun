@@ -31,13 +31,15 @@ or
 Defaultly, xrun will moniter all the .go files. If you want to moniter other files, you can add a config file in the project root folder named xrun.json. The content just like below:
 
 	{
-		"excludeDirs": {
+		"ExcludeDirs": {
 			".git":true,
 			".svn":true
 		},
-		"excludeFiles": {
+		"ExcludeFiles": {
 		},
-		"includeFiles": {
+		"IncludeFiles": {
+		},
+		"IncludeDirs": {
 		}
 	}
 
