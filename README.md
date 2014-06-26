@@ -4,7 +4,7 @@ xRun is a development tool for Go programming language.
 
 # Features
 
-* Auto rebuild and run the program when go files or other special files be changed.
+* Auto rebuild and run the program when go files or other special files changed.
 
 # Installation
 
@@ -31,6 +31,7 @@ or
 Defaultly, xrun will moniter all the .go files. If you want to moniter other files, you can add a config file in the project root folder named xrun.json. The content just like below:
 
 	{
+		"Mode":1,
 		"ExcludeDirs": {
 			".git":true,
 			".svn":true
@@ -43,4 +44,13 @@ Defaultly, xrun will moniter all the .go files. If you want to moniter other fil
 		}
 	}
 
-Above is the default config.
+Above is the default config. 
+The `Mode` is the log level, default is `Linfo`:
+
+	Ldebug = iota
+	Linfo
+	Lwarn
+	Lerror
+	Lpanic
+	Lfatal
+	Lnone
