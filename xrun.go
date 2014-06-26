@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-xweb/log"
 	"github.com/howeyc/fsnotify"
@@ -22,23 +21,69 @@ var (
 	buildLock    sync.Mutex
 	buildProcess *os.Process
 	exePath      string
-	lastModified map[string]time.Time = make(map[string]time.Time)
-	timeLock     sync.RWMutex
+	version      = "0.1.0626"
 )
 
-func isModified(f os.FileInfo) bool {
-	timeLock.Lock()
-	defer timeLock.Unlock()
-	if t, ok := lastModified[f.Name()]; ok {
-		if t.Equal(f.ModTime()) {
+func relativePath(p, root string) string {
+	return p[len(root)+1:]
+}
+
+type cache struct {
+	root  string
+	lock  sync.RWMutex
+	files map[string]os.FileInfo
+}
+
+func NewCache(rootDir string) *cache {
+	return &cache{
+		root:  rootDir,
+		files: make(map[string]os.FileInfo),
+	}
+}
+
+func (c *cache) get(p string) (os.FileInfo, error) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if d, ok := c.files[relativePath(p, c.root)]; ok {
+		return d, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+func (c *cache) add(p string) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	d, err := os.Stat(p)
+	if err != nil {
+		return err
+	}
+	c.files[relativePath(p, c.root)] = d
+	return nil
+}
+
+func (c *cache) isModified(p string) bool {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if t, ok := c.files[relativePath(p, c.root)]; ok {
+		d, err := os.Stat(p)
+		if err != nil {
 			return false
 		}
+
+		return t.ModTime() != d.ModTime() || t.Size() != d.Size()
 	}
-	lastModified[f.Name()] = f.ModTime()
+
 	return true
 }
 
+func (c *cache) remove(p string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	delete(c.files, relativePath(p, c.root))
+}
+
 type conf struct {
+	Mode         int
 	ExcludeDirs  map[string]bool
 	ExcludeFiles map[string]bool
 	IncludeFiles map[string]bool
@@ -51,7 +96,8 @@ var (
 	messages           = make(chan string, 1000)
 	curPath     string
 	config      conf
-	defaultConf = `{
+	defaultConf = fmt.Sprintf(`{
+		"Mode":%v,
 	"ExcludeDirs": {
 		".git":true,
 		".svn":true
@@ -63,7 +109,7 @@ var (
 	"IncludeDirs": {
 	}
 }
-`
+`, log.Linfo)
 )
 
 func loadConfig() error {
@@ -91,7 +137,7 @@ func build() error {
 		buildProcess.Wait()
 	}
 
-	log.Info("开始编译", appName)
+	log.Info("building", appName)
 	args := []string{"build"}
 	args = append(args, "-o", runName)
 	if len(os.Args) > 1 {
@@ -114,7 +160,7 @@ func build() error {
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	}
 
-	log.Info("开始运行")
+	log.Info("running...")
 	buildProcess, err = os.StartProcess(exePath, []string{runName}, attr)
 	if err != nil {
 		return err
@@ -146,12 +192,22 @@ func scan() {
 }
 
 func main() {
+	if len(os.Args) == 2 && strings.ToLower(os.Args[1]) == "--version" {
+		fmt.Println("xrun version", version)
+		return
+	}
+
+	log.SetPrefix("[xrun] ")
+
 	err := loadConfig()
 	if err != nil {
 		log.Error("load config error:", err)
 		return
 	}
-	if len(config.ExcludeDirs) > 0 {
+
+	log.SetOutputLevel(config.Mode)
+
+	/*if len(config.ExcludeDirs) > 0 {
 		dirs := config.ExcludeDirs
 		config.ExcludeDirs = make(map[string]bool)
 		for dir, v := range dirs {
@@ -177,7 +233,7 @@ func main() {
 			dirPath = strings.Replace(dirPath, "\\", "/", -1)
 			config.IncludeFiles[dirPath] = v
 		}
-	}
+	}*/
 	curPath, _ = os.Getwd()
 	curPath = strings.Replace(curPath, "\\", "/", -1)
 	appName = path.Base(curPath)
@@ -210,6 +266,8 @@ func main() {
 
 // moniter go files
 func moniter(rootDir string, otherDirs map[string]bool) error {
+	cache := NewCache(rootDir)
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -219,98 +277,125 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 
 	go func() {
 		for {
+		start:
 			select {
 			case ev := <-watcher.Event:
 				if ev == nil {
 					break
 				}
 
-				d, err := os.Stat(ev.Name)
-				if err != nil {
+				rPath := relativePath(ev.Name, rootDir)
+				log.Debug("relativePath is", rPath, ev)
+				for p, _ := range config.ExcludeDirs {
+					log.Debug("cmp", rPath, p)
+					if strings.HasPrefix(rPath, p) {
+						goto start
+					}
+				}
+				if rPath == appName {
 					break
 				}
 
-				relativePath := ev.Name
-				if d.IsDir() {
-					if _, ok := config.ExcludeDirs[relativePath]; ok {
-						break
-					}
-				} else {
-					if strings.HasSuffix(ev.Name, ".go") {
-						if _, ok := config.ExcludeFiles[relativePath]; ok {
-							break
-						}
-					} else {
-						if _, ok := config.IncludeFiles[relativePath]; !ok {
-							break
-						}
-					}
-
-					if !isModified(d) {
-						break
-					}
-				}
-
-				log.Info("File is changed:", ev.Name)
-
-				if ev.IsCreate() {
-					if d.IsDir() {
-						watcher.Watch(ev.Name)
-					} else {
-						log.Infof("loaded %v", ev.Name)
+				if ev.IsDelete() || ev.IsRename() {
+					d, err := cache.get(ev.Name)
+					if os.IsNotExist(err) {
 						err = build()
 						if err != nil {
-							log.Errorf("load %v failed: %v", ev.Name, err)
-							break
+							log.Errorf("remove %v failed: %v", ev.Name, err)
 						}
+						break
 					}
-				} else if ev.IsDelete() {
+					if err != nil {
+						log.Error(err)
+						break
+					}
+
 					if d.IsDir() {
 						watcher.RemoveWatch(ev.Name)
+						cache.remove(ev.Name)
 					} else {
-						tmpl := ev.Name
-						log.Infof("deleted %v", tmpl)
+						cache.remove(ev.Name)
+						log.Infof("deleted %v", ev.Name)
 						err = build()
 						if err != nil {
 							log.Errorf("remove %v failed: %v", ev.Name, err)
 							break
 						}
 					}
-				} else if ev.IsModify() {
-					if d.IsDir() {
+					break
+				}
+
+				var d os.FileInfo
+				d, err = os.Stat(ev.Name)
+				if err != nil {
+					log.Errorf("file stat error:", err)
+					break
+				}
+
+				if !d.IsDir() {
+					log.Debug("ext file name is", filepath.Ext(ev.Name))
+					if filepath.Ext(ev.Name) == ".go" {
+						if _, ok := config.ExcludeFiles[rPath]; ok {
+							break
+						}
 					} else {
-						tmpl := ev.Name
-						err = build()
-						if err != nil {
-							log.Errorf("reloaded %v failed: %v", tmpl, err)
+						if _, ok := config.IncludeFiles[rPath]; !ok {
+							break
+						}
+					}
+				}
+
+				log.Info("File or Dir is changed:", ev.Name)
+
+				if ev.IsCreate() {
+					if d.IsDir() {
+						watcher.Watch(ev.Name)
+					} else {
+						if !cache.isModified(ev.Name) {
+							log.Debug("File", ev.Name, "is not modified.")
 							break
 						}
 
-						log.Infof("reloaded %v", tmpl)
-					}
-				} else if ev.IsRename() {
-					if d.IsDir() {
-						watcher.RemoveWatch(ev.Name)
-					} else {
-						tmpl := ev.Name
+						log.Infof("loaded %v", ev.Name)
 						err = build()
 						if err != nil {
-							log.Errorf("reloaded %v failed: %v", tmpl, err)
+							log.Errorf("after %v changed build failed: %v", ev.Name, err)
 							break
 						}
 					}
+				} else if ev.IsModify() {
+					if d.IsDir() {
+					} else {
+						if !cache.isModified(ev.Name) {
+							log.Debug("File", ev.Name, "is not modified.")
+							break
+						}
+
+						err = build()
+						if err != nil {
+							log.Errorf("reloaded %v failed: %v", ev.Name, err)
+							break
+						}
+
+						log.Infof("reloaded %v", ev.Name)
+					}
+				} else {
+					log.Errorf("unknown event: %v", ev)
+					break
 				}
 			case err := <-watcher.Error:
 				log.Errorf("watch error: %v", err)
 			}
 		}
 	}()
+
 	fn := func(f string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return watcher.Watch(f)
 		}
 		return nil
 	}
+
 	err = filepath.Walk(rootDir, fn)
 
 	if len(otherDirs) > 0 {
