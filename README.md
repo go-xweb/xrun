@@ -1,4 +1,4 @@
-xRun is a development tool for Go programming language.
+Xrun is a development tool for Go programming language.
 
 ===
 
