@@ -292,7 +292,7 @@ func moniter(rootDir string, otherDirs map[string]bool) error {
 						goto start
 					}
 				}
-				if rPath == appName {
+				if rPath == runName {
 					break
 				}
 
